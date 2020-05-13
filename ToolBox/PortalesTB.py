@@ -1,7 +1,7 @@
 # coding=utf-8
 # ¡Importante!: El interprete debe ser Pyhton 2.7 C:\Python27\ArcGIS10.X\python.exe (entorno x32)
 
-import arcpy, glob
+import arcpy, glob, math
 
 arcpy.env.overwriteOutput = True
 
@@ -12,7 +12,7 @@ arcpy.env.workspace = arcpy.GetParameterAsText(0)
 ruta_Carto = arcpy.GetParameterAsText(1)
 
 # Se solicita la distancia para hacer la intersección espacial
-dist = arcpy.GetParameterAsText(2)
+dist = arcpy.GetParameter(2)
 
 # Se recorren todas las mdbs que se encuentran en la carpeta indicada por el usuario y
 # en cada iteración se establece cada una de ellas como workspace
@@ -51,23 +51,47 @@ for workspace in arcpy.ListWorkspaces():
                 arcpy.CreateFeatureclass_management(path, nFC, geomType, fc, "SAME_AS_TEMPLATE", "SAME_AS_TEMPLATE", sr)
                 arcpy.Append_management(selection, nFC, "TEST")
                 for fcCarto in glob.glob(ruta_Carto + "//*.shp"):
-                    srCarto = arcpy.Describe(fcCarto).spatialReference
-                    fc_join = fc + "_join" + str(dist)
-                    # Se comprueba que los sistemas de referencia coincidan
+
+                    # Se crea el nombre del archivo que almacenará el spatial join en función de la distancia
+                    # introducida por el usuario
+                    if dist == 0:
+                        fc_join = fc + "_join0"
+                    elif math.fmod(dist, 1) != 0:
+                        fc_join = fc + "_join0" + str(dist).split(".")[1]
+                    elif math.fmod(dist, 1) == 0:
+                        fc_join = fc + "_join" + str(dist).split(".")[0]
+
+                    # Se comprueba que los sistemas de referencia coincidan y si la distancia se ha introducido como
+                    # parametro ya que este valor es opcional
                     # Para mejorar el rendimiento, la proyección se hace al SR que tenga la FC con menos entidades
                     # Después del SpatialJoin se proyecta la FC resultante al SR de nFC
-                    if srCarto.name != sr.name:
-                        arcpy.Project_management(nFC, "fcCarto_project", srCarto.GCS)
-                        arcpy.SpatialJoin_analysis("fcCarto_project", fcCarto, "fc_join_aux", "JOIN_ONE_TO_MANY", True,
-                                                   match_option="WITHIN_A_DISTANCE",
+                    srCarto = arcpy.Describe(fcCarto).spatialReference
+                    if srCarto.name != sr.name and dist != 0:
+                        arcpy.Project_management(nFC, "nFC_project", srCarto.GCS)
+                        arcpy.SpatialJoin_analysis("nFC_project", fcCarto, "fc_join_aux", "JOIN_ONE_TO_ONE", True,
+                                                   match_option="CLOSEST",
                                                    search_radius=str(dist) + " Meters")
                         arcpy.Project_management("fc_join_aux", fc_join, sr.GCS)
-                        arcpy.Delete_management("fcCarto_project")
+                        arcpy.Near_analysis(fc_join, fcCarto)
+                        arcpy.Delete_management("nFC_project")
                         arcpy.Delete_management("fc_join_aux")
-                    else:
-                        arcpy.SpatialJoin_analysis(nFC, fcCarto, fc_join, "JOIN_ONE_TO_MANY", True,
-                                                   match_option="WITHIN_A_DISTANCE",
+                    elif srCarto.name != sr.name and dist == 0:
+                        arcpy.Project_management(nFC, "nFC_project", srCarto.GCS)
+                        arcpy.SpatialJoin_analysis("nFC_project", fcCarto, "fc_join_aux", "JOIN_ONE_TO_ONE", True,
+                                                   match_option="CLOSEST")
+                        arcpy.Project_management("fc_join_aux", fc_join, sr.GCS)
+                        arcpy.Near_analysis(fc_join, fcCarto)
+                        arcpy.Delete_management("nFC_project")
+                        arcpy.Delete_management("fc_join_aux")
+                    elif srCarto.name == sr.name and dist != 0:
+                        arcpy.SpatialJoin_analysis(nFC, fcCarto, fc_join, "JOIN_ONE_TO_ONE", True,
+                                                   match_option="CLOSEST",
                                                    search_radius=str(dist) + " Meters")
+                        arcpy.Near_analysis(fc_join, fcCarto)
+                    elif srCarto.name == sr.name and dist == 0:
+                        arcpy.SpatialJoin_analysis(nFC, fcCarto, fc_join, "JOIN_ONE_TO_ONE", True,
+                                                   match_option="CLOSEST")
+                        arcpy.Near_analysis(fc_join, fcCarto)
 
                     # Condición de parada del bucle (for fcCarto in glob.glob(ruta_Carto + "//*.shp"))
                     fields = arcpy.ListFields(fc_join)
