@@ -46,14 +46,15 @@ for workspace in arcpy.ListWorkspaces():
             # Si el FIDSet del objeto 'selection' tiene una longitud > 0, existen entidades seleccionadas, entonces:
             # Se crea una nueva FC (*_empty) dentro de la mdb con el mismo esquema que la clase de entidad original
             # Se añade la selección a la nueva FC (nFC)
-            # Se hace el spatial_join, creando la nueva FC (fc_join)
+            # Se hace el spatial_join, creando la nueva FC (fc_join). El spatial_join será de tipo CLOSEST
             if len(arcpy.Describe(selection).FIDSet) > 0:
                 arcpy.CreateFeatureclass_management(path, nFC, geomType, fc, "SAME_AS_TEMPLATE", "SAME_AS_TEMPLATE", sr)
                 arcpy.Append_management(selection, nFC, "TEST")
                 for fcCarto in glob.glob(ruta_Carto + "//*.shp"):
 
                     # Se crea el nombre del archivo que almacenará el spatial join en función de la distancia
-                    # introducida por el usuario
+                    # introducida por el usuario. En caso de que no se haya introducido distancia como parámetro el
+                    # nombre del archivo acabará en 0
                     if dist == 0:
                         fc_join = fc + "_join0"
                     elif math.fmod(dist, 1) != 0:
@@ -63,10 +64,10 @@ for workspace in arcpy.ListWorkspaces():
 
                     # Se comprueba que los sistemas de referencia coincidan y si la distancia se ha introducido como
                     # parametro ya que este valor es opcional
-                    # Para mejorar el rendimiento, la proyección se hace al SR que tenga la FC con menos entidades
-                    # Después del SpatialJoin se proyecta la FC resultante al SR de nFC
                     srCarto = arcpy.Describe(fcCarto).spatialReference
                     if srCarto.name != sr.name and dist != 0:
+                        # Para mejorar el rendimiento, la proyección se hace al SR que tenga la FC con menos entidades
+                        # Después del SpatialJoin se proyecta la FC resultante al SR de nFC
                         arcpy.Project_management(nFC, "nFC_project", srCarto.GCS)
                         arcpy.SpatialJoin_analysis("nFC_project", fcCarto, "fc_join_aux", "JOIN_ONE_TO_ONE", True,
                                                    match_option="CLOSEST",
@@ -76,22 +77,47 @@ for workspace in arcpy.ListWorkspaces():
                         arcpy.Delete_management("nFC_project")
                         arcpy.Delete_management("fc_join_aux")
                     elif srCarto.name != sr.name and dist == 0:
+                        # Para mejorar el rendimiento, la proyección se hace al SR que tenga la FC con menos entidades
+                        # Después del SpatialJoin se proyecta la FC resultante al SR de nFC
                         arcpy.Project_management(nFC, "nFC_project", srCarto.GCS)
-                        arcpy.SpatialJoin_analysis("nFC_project", fcCarto, "fc_join_aux", "JOIN_ONE_TO_ONE", True,
-                                                   match_option="CLOSEST")
-                        arcpy.Project_management("fc_join_aux", fc_join, sr.GCS)
-                        arcpy.Near_analysis(fc_join, fcCarto)
-                        arcpy.Delete_management("nFC_project")
-                        arcpy.Delete_management("fc_join_aux")
+                        arcpy.MakeFeatureLayer_management("nFC_project", "nFC_project_layer")
+                        arcpy.MakeFeatureLayer_management(fcCarto, "fcCarto_layer")
+                        selectionByLocation = arcpy.SelectLayerByLocation_management("fcCarto_layer", "INTERSECT",
+                                                                                     "nFC_project_layer", 1)
+                        # Si el FIDSet del objeto 'selectionByLocation' tiene una longitud > 0,
+                        # existen entidades seleccionadas, entonces:
+                        # Se ejecuta el spatial_join
+                        # En caso contrario, busca otro shp, pasando a la siguiente iteración del bucle
+                        if len(arcpy.Describe(selectionByLocation).FIDSet) > 0:
+                            arcpy.SpatialJoin_analysis("nFC_project", fcCarto, "fc_join_aux", "JOIN_ONE_TO_ONE", True,
+                                                       match_option="CLOSEST")
+                            arcpy.Project_management("fc_join_aux", fc_join, sr.GCS)
+                            arcpy.Near_analysis(fc_join, fcCarto)
+                            arcpy.Delete_management("nFC_project")
+                            arcpy.Delete_management("fc_join_aux")
+                        else:
+                            continue
+                        arcpy.SelectLayerByAttribute_management(selectionByLocation, "CLEAR_SELECTION")
                     elif srCarto.name == sr.name and dist != 0:
                         arcpy.SpatialJoin_analysis(nFC, fcCarto, fc_join, "JOIN_ONE_TO_ONE", True,
                                                    match_option="CLOSEST",
                                                    search_radius=str(dist) + " Meters")
                         arcpy.Near_analysis(fc_join, fcCarto)
                     elif srCarto.name == sr.name and dist == 0:
-                        arcpy.SpatialJoin_analysis(nFC, fcCarto, fc_join, "JOIN_ONE_TO_ONE", True,
-                                                   match_option="CLOSEST")
-                        arcpy.Near_analysis(fc_join, fcCarto)
+                        arcpy.MakeFeatureLayer_management(fcCarto, "fcCarto_layer")
+                        selectionByLocation = arcpy.SelectLayerByLocation_management("fcCarto_layer", "INTERSECT",
+                                                                                     fc_layer, 1)
+                        # Si el FIDSet del objeto 'selectionByLocation' tiene una longitud > 0,
+                        # existen entidades seleccionadas, entonces:
+                        # Se ejecuta el spatial_join
+                        # En caso contrario, busca otro shp, pasando a la siguiente iteración del bucle
+                        if len(arcpy.Describe(selectionByLocation).FIDSet) > 0:
+                            arcpy.SpatialJoin_analysis(nFC, fcCarto, fc_join, "JOIN_ONE_TO_ONE", True,
+                                                       match_option="CLOSEST")
+                            arcpy.Near_analysis(fc_join, fcCarto)
+                        else:
+                            continue
+                        arcpy.SelectLayerByAttribute_management(selectionByLocation, "CLEAR_SELECTION")
 
                     # Condición de parada del bucle (for fcCarto in glob.glob(ruta_Carto + "//*.shp"))
                     fields = arcpy.ListFields(fc_join)
